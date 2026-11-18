@@ -8,12 +8,19 @@ from io import BytesIO
 st.set_page_config(page_title="CareerForge AI",page_icon="🚀",layout="wide")
 st.title("🚀 CareerForge — Resume & Skill Analyzer")
 st.caption("Transparent keyword-based resume comparison • No external AI API required")
-SKILLS = ["python","java","javascript","typescript","sql","excel","machine learning","deep learning","data analysis","pandas","numpy","scikit-learn","tensorflow","pytorch","streamlit","flask","fastapi","react","html","css","git","github","docker","aws","linux","arduino","esp32","iot","embedded systems","c++","communication","leadership","problem solving"]
-def skills_in(text):
-    text = text.lower()
-    return {s for s in SKILLS if re.search(r"(?<![a-z0-9])"+re.escape(s)+r"(?![a-z0-9])",text)}
+from skill_utils import compare
 def pdf_text(upload):
-    return "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(upload.getvalue())).pages)
+    if upload.size > 2_000_000:
+        raise ValueError("File must be 2 MB or smaller.")
+    reader = PdfReader(BytesIO(upload.getvalue()))
+    if reader.is_encrypted:
+        raise ValueError("Password-protected PDFs are not supported.")
+    if len(reader.pages) > 20:
+        raise ValueError("PDF must be 20 pages or fewer.")
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    if not text.strip():
+        raise ValueError("No selectable text found. Scanned PDFs are not supported.")
+    return text
 with st.sidebar:
     st.header("Input")
     uploaded = st.file_uploader("Resume (optional PDF or TXT)",type=["pdf","txt"])
@@ -22,22 +29,22 @@ default_resume = "Python, pandas, numpy, Streamlit, SQL, Git, Arduino, data anal
 resume = st.text_area("Resume text",value=default_resume,height=180)
 if uploaded:
     try:
-        resume = pdf_text(uploaded) if uploaded.name.lower().endswith(".pdf") else uploaded.getvalue().decode("utf-8")
+        if uploaded.size > 2_000_000:
+            raise ValueError("File must be 2 MB or smaller.")
+        resume = pdf_text(uploaded) if uploaded.name.lower().endswith(".pdf") else uploaded.getvalue().decode("utf-8-sig")
+        if not resume.strip():
+            raise ValueError("Uploaded resume is empty.")
         st.info(f"Analyzing uploaded file: {uploaded.name}")
-    except Exception as e:
-        st.error(f"Could not read file: {e}")
+    except Exception:
+        st.error("Could not read the resume. Upload a valid, unencrypted text-based PDF or UTF-8 TXT (maximum 2 MB).")
         st.stop()
 job = st.text_area("Paste job requirements",value="Looking for Python, SQL, machine learning, scikit-learn, Git, Docker, AWS and communication skills.",height=150)
-required = skills_in(job)
-present = skills_in(resume)
-matched = sorted(required & present)
-missing = sorted(required - present)
-score = len(matched)/len(required)*100 if required else 0
+matched, missing, score = compare(resume, job)
 a,b,c = st.columns(3)
-a.metric("Skill coverage",f"{score:.0f}%" if required else "N/A")
+a.metric("Skill coverage",f"{score:.0f}%" if score is not None else "N/A")
 b.metric("Matched skills",len(matched))
 c.metric("Missing skills",len(missing))
-if not required:
+if score is None:
     st.warning("No known skills found in the job description. Add more specific skill requirements.")
 else:
     st.progress(score/100)
